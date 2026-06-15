@@ -87,7 +87,7 @@ export function StepExport({
     () => accounts.filter((a) => !a.taxCode).length,
     [accounts],
   );
-  const inBalance = Math.abs(stats.net) < 0.005;
+  const inBalance = Math.round(stats.net * 100) === 0;
   const previewRows = accounts.slice().sort((a, b) => a.sourceRow - b.sourceRow).slice(0, 6);
 
   async function handleDownload() {

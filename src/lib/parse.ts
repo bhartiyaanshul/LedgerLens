@@ -208,8 +208,10 @@ export function normalize(
       if (val >= 0) debit = val;
       else credit = -val;
     } else {
-      debit = Math.abs(mapping.debit ? parseAmount(row[mapping.debit]) : 0);
-      credit = Math.abs(mapping.credit ? parseAmount(row[mapping.credit]) : 0);
+      // Sign-preserving: a negative in the debit column (e.g. "(500)") nets as
+      // a credit rather than being silently flipped positive by Math.abs.
+      debit = mapping.debit ? parseAmount(row[mapping.debit]) : 0;
+      credit = mapping.credit ? parseAmount(row[mapping.credit]) : 0;
     }
     const amount = debit - credit;
 

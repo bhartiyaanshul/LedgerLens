@@ -37,7 +37,12 @@ export function compileRules(
   weakTokens: string[],
 ): CompiledRules {
   return {
-    lines: lines.map((l) => ({
+    // Skip lines with no name: an unnamed-but-keyworded line would otherwise
+    // match and assign taxLine="" — a value the review dropdown can't show or
+    // re-select, leaving the row in a broken, unrecoverable state.
+    lines: lines
+      .filter((l) => l.name.trim().length > 0)
+      .map((l) => ({
       name: l.name.trim(),
       code: l.code.trim(),
       section: l.section,

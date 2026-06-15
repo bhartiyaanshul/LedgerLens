@@ -87,7 +87,8 @@ export function StepReview({
     return { total, review, assigned: total - review, net };
   }, [accounts]);
 
-  const inBalance = Math.abs(summary.net) < 0.005;
+  // Exact to the cent — a trial balance balances to the penny or it doesn't.
+  const inBalance = Math.round(summary.net * 100) === 0;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
