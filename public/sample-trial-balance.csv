@@ -1,0 +1,32 @@
+Account No,Account Description,Debit,Credit
+1000,Cash - Operating,45000,
+1010,Cash - Reserve,12000,
+1200,Accounts Receivable - Tenant,3500,
+1500,Land,250000,
+1510,Building,900000,
+1520,Accumulated Depreciation - Building,,120000
+1600,Furniture & Fixtures,35000,
+1610,Accumulated Depreciation - F&F,,15000
+1700,Prepaid Insurance,6000,
+2000,Accounts Payable,,8500
+2100,Tenant Security Deposits,,12000
+2200,Mortgage Payable,,720000
+2300,Loan from Partner,,50000
+3000,Partner Capital,,315000
+4000,Rental Income,,180000
+4010,Laundry & Vending Income,,6700
+6000,Advertising,2400,
+6010,Property Management Fees,14400,
+6020,Repairs & Maintenance,18000,
+6030,Cleaning & Janitorial,5200,
+6040,Insurance - Property,9600,
+6050,Real Estate Taxes,22000,
+6060,Mortgage Interest,38000,
+6070,Utilities - Electric & Water,8400,
+6080,Legal & Professional Fees,4500,
+6090,Depreciation Expense,45000,
+6100,Bank Service Charges,600,
+6110,Landscaping & Lawn Care,3600,
+6120,Leasing Commissions,2000,
+6130,Office Supplies,800,
+6140,Telephone & Internet,1200,
