@@ -1,17 +1,17 @@
-# LedgerLens — Trial Balance → UltraTax
+# LedgerLens — Trial Balance → Tax Lines
 
-**Upload a client's trial balance → auto-assign US tax codes → review & correct → export a single-sheet file ready to import into UltraTax CS.**
+**Upload a client's trial balance → auto-assign US tax codes → review & correct → export a categorized workbook with a tax-line pivot.**
 
-LedgerLens is a focused web app for CPAs and bookkeepers who prepare **rental real estate** returns. It turns a raw trial balance into a categorized, UltraTax-ready import file in a 6-step wizard — mapping each GL account to the correct **tax code** (the number UltraTax uses to route an account to a specific form line).
+LedgerLens is a focused web app for CPAs and bookkeepers who prepare **rental real estate** returns. It turns a raw trial balance into a categorized workbook in a 6-step wizard — mapping each GL account to the correct **tax line** and its **tax code** (the number that routes an account to a specific form line).
 
-- 🇺🇸 **US tax–aware**, with the official UltraTax tax-code sets for **Form 1065** (partnership), **Form 1120-S** (S-corp), **Form 1120** (C-corp), and **Form 1040 Schedule E** (individual rental).
+- 🇺🇸 **US tax–aware**, with the standard tax-code sets for **Form 1065** (partnership), **Form 1120-S** (S-corp), **Form 1120** (C-corp), and **Form 1040 Schedule E** (individual rental).
 - 🧮 **Fast local rule engine** with **word-boundary** keyword matching and **specificity disambiguation** (so "Accumulated Depreciation – Building" maps to *Accumulated depreciation*, not *Building*).
 - 🤖 **Optional AI fallback** for accounts the rules can't place — provider-agnostic (Groq or Gemini), API key kept **server-side only**.
-- 📄 **Single-sheet export** in UltraTax CS's Trial Balance Import layout — *Account Number · Account Description · Unit · Tax Code · Amount*. Nothing extra.
+- 📄 **Two-sheet export** — a detail sheet (*Account Number · Account Name · Amount · Tax line*) and a **pivot grouped by tax line** with subtotals. Totals net to zero when the books balance.
 - ✅ **Built-in trial-balance check** (debits = credits) and a full audit trail for every account.
 - 💾 **No database** — tax-code config persists in `localStorage` with JSON import/export.
 
-> ⚠️ **This is a categorization aid, not tax advice.** Every assignment is editable and must be reviewed by the preparer. Confirm tax codes against your UltraTax version before importing — Thomson Reuters revises codes over time.
+> ⚠️ **This is a categorization aid, not tax advice.** Every assignment is editable and must be reviewed by the preparer. Confirm tax codes against your tax software's current code list — they're revised over time.
 
 ---
 
@@ -19,12 +19,12 @@ LedgerLens is a focused web app for CPAs and bookkeepers who prepare **rental re
 
 A 6-step wizard:
 
-1. **Upload** — drag & drop the trial balance (CSV/XLSX), or click *Try sample data*. Parsed entirely in the browser.
-2. **Map columns** — auto-detects *Account Number*, *Account Description*, and either separate *Debit*/*Credit* columns or one signed *Balance*.
-3. **Tax setup** — pick the return type (1065 / 1120-S / 1120 / 1040 Sch E) and review/edit the tax lines, their **UltraTax codes**, and matching keywords. Saved to `localStorage`.
+1. **Upload** — drag & drop the trial balance (CSV/XLSX), or click *Try sample data*. Parsed entirely in the browser; if the workbook has several tabs, pick which one to import.
+2. **Map columns** — auto-detects *Account Number*, *Account Description*, and either separate *Debit*/*Credit* columns or one signed *Balance*, and shows a live **balance check** (debits = credits) on the chosen tab.
+3. **Tax setup** — pick the return type (1065 / 1120-S / 1120 / 1040 Sch E) and review/edit the tax lines, their **tax codes**, and matching keywords. Saved to `localStorage`.
 4. **Categorize** — the rule engine runs locally; optionally send the leftovers to the LLM. Live progress + coverage %.
 5. **Review** — an editable, sortable, filterable table with inline tax-line dropdowns (auto-filling the code), bulk re-assign, low-confidence highlighting, and a live **trial-balance balance check**.
-6. **Export** — download the single-sheet `.xlsx`, with a return summary (net income, total assets, liabilities & capital).
+6. **Export** — download the two-sheet `.xlsx` (detail + tax-line pivot), with a return summary (net income, total assets, liabilities & capital).
 
 ### The rule engine (client-side)
 
@@ -38,7 +38,7 @@ Keywords match the **account name** with word-boundary regex (`\bkeyword\b`), so
 
 ### The tax codes
 
-Tax codes are the official **UltraTax CS / CS Professional Suite** values from Thomson Reuters' *"Tax Code Listing for Chart of Accounts Setup"* (1065/1120-S/1120) and the 1040 listing (Schedule E). Examples for **Form 8825 / 1065**:
+Tax codes are the standard values from the *"Tax Code Listing for Chart of Accounts Setup"* (1065/1120-S/1120) and the 1040 listing (Schedule E). Examples for **Form 8825 / 1065**:
 
 | Form 8825 line | Code | | Schedule L line | Code |
 |---|---|---|---|---|
@@ -55,19 +55,18 @@ Tax codes are the official **UltraTax CS / CS Professional Suite** values from T
 
 All codes and keywords are editable in **Tax setup** and exportable/importable as JSON, so your firm can tune them once and reuse across clients.
 
-### Importing into UltraTax CS
+### The export
 
-The export matches UltraTax's spreadsheet import format. In UltraTax CS:
+Two sheets in one `.xlsx`:
 
-1. **Utilities ▸ Trial Balance Import** (or your firm's TB import workflow).
-2. Map the five columns: **Account Number, Account Description, Unit, Tax Code, Amount**.
-3. UltraTax summarizes by tax code and transfers the balances to the right form lines.
+1. **Trial Balance** — one row per account: *Account Number · Account Name · Amount · Tax line*, in the original trial-balance order, ending with a bold **Total** row.
+2. **Tax line pivot** — the same accounts grouped by **tax line**, ordered by statement section (income, expense, assets, liabilities, capital), with a **subtotal** per tax line and a grand total.
 
 Notes:
 
-- **Amount sign** = signed net balance (**debit positive, credit negative**) — the standard trial-balance convention. UltraTax applies each tax code's natural sign.
-- **Tax code `99999`** marks an account as *Do not import* (excluded). Accounts you leave **Unassigned** export with a **blank** tax code so they're visibly unmapped in UltraTax until resolved.
-- Depreciation/amortization are often computed by UltraTax's asset module; review whether to import book figures or exclude those accounts.
+- The **tax line name** is shown (not the numeric code), matching the firm's review format.
+- **Amount sign** = signed net balance (**debit positive, credit negative**) — the standard trial-balance convention, so every total nets to **zero** when the books balance.
+- Accounts you leave **Unassigned** export under an *Unassigned* group so they're visibly unmapped until resolved.
 
 ---
 
@@ -140,10 +139,10 @@ src/
     api/categorize/route.ts  # SERVER-ONLY LLM route (Groq / Gemini switch)
   lib/
     types.ts                 # TaxLine, TbAccount, TaxConfig, EntityType, …
-    constants.ts             # official UltraTax tax-code seeds per entity
+    constants.ts             # standard tax-code seeds per entity
     engine.ts                # rule engine (word-boundary + specificity)
     parse.ts                 # trial-balance parsing + column auto-detect
-    export.ts                # single-sheet UltraTax import builder (ExcelJS)
+    export.ts                # two-sheet workbook builder: detail + pivot (ExcelJS)
     config.ts                # localStorage load/save + JSON import/export
     llm-client.ts            # client wrapper: batching, progress, retry-tolerant
   components/wizard/         # stepper + the six steps + privacy notice

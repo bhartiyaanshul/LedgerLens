@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Core domain types for the trial-balance -> UltraTax tax-code categorizer.
+// Core domain types for the trial-balance -> tax-code categorizer.
 //
 // A CPA uploads a client's trial balance. Each account is mapped to a US tax
-// "tax code" (the UltraTax CS code that routes a GL account to a specific form
-// line — e.g. Form 8825 line 3 "Advertising" = code 503). The result exports
-// as a single sheet in UltraTax's Trial Balance Import layout:
-//   Account Number | Account Description | Unit | Tax Code | Amount
+// "tax code" (the code that routes a GL account to a specific form line —
+// e.g. Form 8825 line 3 "Advertising" = code 503). The result exports as a
+// two-sheet workbook: a flat detail sheet
+//   Account Number | Account Name | Amount | Tax line
+// plus a pivot grouped by tax line.
 // ---------------------------------------------------------------------------
 
 export type Confidence = "high" | "medium" | "low";
@@ -20,14 +21,14 @@ export type EntityType = "1065" | "1120S" | "1120" | "1040E";
 
 /**
  * One destination a GL account can be mapped to: a US tax form line and its
- * UltraTax tax code. Keywords drive the local rule engine (matched against the
+ * tax code. Keywords drive the local rule engine (matched against the
  * account name with word boundaries).
  */
 export type TaxLine = {
   id: string;
   /** Human label, e.g. "Advertising". */
   name: string;
-  /** UltraTax tax code, e.g. "503". Empty for special non-importing buckets. */
+  /** Tax code, e.g. "503". Empty for special non-importing buckets. */
   code: string;
   section: Section;
   /** Where it lands, e.g. "Form 8825, Line 3" or "Sch L, line 15". */
@@ -60,7 +61,7 @@ export type TbAccount = {
   unit: string;
   /** Assigned tax line name, or a special bucket (Unassigned / Needs Review). */
   taxLine: string;
-  /** Assigned UltraTax tax code ("" when unassigned / needs review). */
+  /** Assigned tax code ("" when unassigned / needs review). */
   taxCode: string;
   section: Section | "";
   confidence: Confidence;

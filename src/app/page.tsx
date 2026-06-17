@@ -139,7 +139,7 @@ export default function Home() {
             <div className="leading-tight">
               <p className="font-semibold tracking-tight">LedgerLens</p>
               <p className="hidden text-xs text-muted-foreground sm:block">
-                Trial balance → UltraTax tax codes
+                Trial balance → tax lines
               </p>
             </div>
           </div>

@@ -1,6 +1,14 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, CheckCircle2, Info } from "lucide-react";
+import { useMemo } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  Info,
+  Scale,
+  TriangleAlert,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -18,7 +26,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatNumber } from "@/lib/utils";
+import { normalize } from "@/lib/parse";
 import type { AmountMode, ColumnMapping, ParsedFile } from "@/lib/types";
 
 const NONE = "__none__";
@@ -82,6 +91,26 @@ export function StepMapColumns({
     amountMode === "single" ? !!mapping.balance : !!mapping.debit || !!mapping.credit;
   const canContinue = !!mapping.description && amountOk;
   const previewRows = parsed.rows.slice(0, 5);
+
+  // A trial balance must net to zero. Compute it from the same normalization the
+  // export uses, so the CPA catches a wrong tab or column mapping right here.
+  const balance = useMemo(() => {
+    if (!mapping.description || !amountOk) return null;
+    try {
+      const accts = normalize(parsed, { mapping, amountMode });
+      const totalDebit = accts.reduce((s, a) => s + a.debit, 0);
+      const totalCredit = accts.reduce((s, a) => s + a.credit, 0);
+      return {
+        totalDebit,
+        totalCredit,
+        net: totalDebit - totalCredit,
+        count: accts.length,
+      };
+    } catch {
+      return null;
+    }
+  }, [parsed, mapping, amountMode, amountOk]);
+  const inBalance = balance ? Math.round(balance.net * 100) === 0 : false;
 
   return (
     <div className="space-y-6">
@@ -214,6 +243,58 @@ export function StepMapColumns({
               : "at least one of Debit or Credit"}{" "}
             to continue.
           </span>
+        </div>
+      )}
+
+      {balance && (
+        <div
+          className={cn(
+            "rounded-xl border p-4",
+            inBalance
+              ? "border-success/40 bg-success/5"
+              : "border-destructive/40 bg-destructive/5",
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-sm">
+            <span className="flex items-center gap-2 font-medium">
+              {inBalance ? (
+                <Scale className="h-4 w-4 text-success" />
+              ) : (
+                <TriangleAlert className="h-4 w-4 text-destructive" />
+              )}
+              Balance check
+              <span className="text-muted-foreground">
+                · {formatNumber(balance.count)} accounts
+              </span>
+            </span>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 tabular-nums">
+              <span className="text-muted-foreground">
+                Debits{" "}
+                <span className="font-medium text-foreground">
+                  {formatCurrency(balance.totalDebit)}
+                </span>
+              </span>
+              <span className="text-muted-foreground">
+                Credits{" "}
+                <span className="font-medium text-foreground">
+                  {formatCurrency(balance.totalCredit)}
+                </span>
+              </span>
+              {inBalance ? (
+                <span className="font-semibold text-success">In balance ✓</span>
+              ) : (
+                <span className="font-semibold text-destructive">
+                  Off by {formatCurrency(balance.net)}
+                </span>
+              )}
+            </div>
+          </div>
+          {!inBalance && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              A trial balance should net to zero. Check you picked the right tab
+              and mapped the debit/credit (or balance) columns correctly.
+            </p>
+          )}
         </div>
       )}
 

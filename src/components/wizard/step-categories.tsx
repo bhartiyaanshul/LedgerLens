@@ -150,7 +150,7 @@ export function StepCategories({
         <div className="space-y-1.5">
           <h2 className="text-2xl font-semibold tracking-tight">Tax setup</h2>
           <p className="max-w-2xl text-muted-foreground">
-            Pick the return type, then map each tax line to its UltraTax code.
+            Pick the return type, then map each tax line to its tax code.
             Keywords match account names with <strong>whole-word</strong>
             boundaries. Saved automatically to this browser.
           </p>
@@ -242,7 +242,7 @@ export function StepCategories({
                           onChange={(e) => patchLine(line.id, { code: e.target.value })}
                           placeholder="Code"
                           className="h-8 w-20 text-center font-mono text-sm"
-                          aria-label="UltraTax tax code"
+                          aria-label="Tax code"
                         />
                         <Select
                           value={line.section}

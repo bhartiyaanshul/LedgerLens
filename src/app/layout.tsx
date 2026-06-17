@@ -5,9 +5,9 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "LedgerLens — Trial Balance to UltraTax",
+  title: "LedgerLens — Trial Balance to Tax Lines",
   description:
-    "Upload a client trial balance, auto-assign US tax codes (Form 8825 / Schedule L / Schedule E) with a rule engine + AI fallback, review, and export a single-sheet UltraTax CS import file. Built for CPAs and bookkeepers.",
+    "Upload a client trial balance, auto-assign US tax codes (Form 8825 / Schedule L / Schedule E) with a rule engine + AI fallback, review, and export a categorized workbook with a tax-line pivot. Built for CPAs and bookkeepers.",
   applicationName: "LedgerLens",
 };
 

@@ -88,7 +88,15 @@ export function loadConfig(): TaxConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultConfig();
-    return coerceConfig(JSON.parse(raw)) ?? defaultConfig();
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    // Drop configs saved by an older schema so corrected seed data (tax codes,
+    // form lines, keywords) is picked up instead of stale persisted values.
+    // A firm's customizations are re-seeded from the new defaults; they can
+    // re-export/re-import a saved JSON if they kept one.
+    if (typeof parsed?.version === "number" && parsed.version < CONFIG_VERSION) {
+      return defaultConfig();
+    }
+    return coerceConfig(parsed) ?? defaultConfig();
   } catch {
     return defaultConfig();
   }

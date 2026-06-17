@@ -17,7 +17,13 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { PrivacyNotice } from "./privacy-notice";
-import { isFlagged, lineByName, needsLLM, runRuleEngine } from "@/lib/engine";
+import {
+  flagSectionConflict,
+  isFlagged,
+  lineByName,
+  needsLLM,
+  runRuleEngine,
+} from "@/lib/engine";
 import { categorizeWithAI } from "@/lib/llm-client";
 import { formatNumber } from "@/lib/utils";
 import type { TaxLine, TbAccount } from "@/lib/types";
@@ -102,7 +108,9 @@ export function StepCategorize({
         if (!assignment) return a;
         const line = lineByName(lines, assignment.category);
         if (!line) return a; // model said "Others"/unknown -> leave for manual
-        return {
+        // Guardrail: the model only sees the account name, so cross-check its
+        // pick against the account-number series before trusting it.
+        return flagSectionConflict({
           ...a,
           taxLine: line.name,
           taxCode: line.code,
@@ -110,7 +118,7 @@ export function StepCategorize({
           confidence: assignment.confidence,
           method: "llm" as const,
           note: "categorised by model",
-        };
+        });
       }),
     );
     setAiInfo({

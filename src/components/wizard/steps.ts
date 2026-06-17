@@ -6,5 +6,5 @@ export const STEPS: { id: StepId; title: string; description: string }[] = [
   { id: 3, title: "Tax setup", description: "Entity & tax-code lines" },
   { id: 4, title: "Categorize", description: "Run rules + optional AI" },
   { id: 5, title: "Review", description: "Check & correct codes" },
-  { id: 6, title: "Export", description: "UltraTax import sheet" },
+  { id: 6, title: "Export", description: "Detail & pivot workbook" },
 ];

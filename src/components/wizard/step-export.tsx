@@ -20,10 +20,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SECTION_LABELS, SECTION_ORDER } from "@/lib/engine";
+import { hasSectionConflict, SECTION_LABELS, SECTION_ORDER } from "@/lib/engine";
 import { downloadWorkbook, exportFileName } from "@/lib/export";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { entityMeta } from "@/lib/constants";
+import { entityMeta, REVIEW, UNASSIGNED } from "@/lib/constants";
 import type { EntityType, Section, TbAccount } from "@/lib/types";
 
 /** Credit-natural sections display positive when the balance is a credit. */
@@ -83,8 +83,17 @@ export function StepExport({
     };
   }, [accounts]);
 
-  const missingCode = useMemo(
-    () => accounts.filter((a) => !a.taxCode).length,
+  const missingLine = useMemo(
+    () =>
+      accounts.filter(
+        (a) => !a.taxLine || a.taxLine === UNASSIGNED || a.taxLine === REVIEW,
+      ).length,
+    [accounts],
+  );
+  // Unresolved section conflicts: the code's section disagrees with the
+  // account-number series, and a human hasn't deliberately set it (manual).
+  const conflicts = useMemo(
+    () => accounts.filter((a) => a.method !== "manual" && hasSectionConflict(a)).length,
     [accounts],
   );
   const inBalance = Math.round(stats.net * 100) === 0;
@@ -108,29 +117,46 @@ export function StepExport({
       <div className="space-y-1.5">
         <h2 className="text-2xl font-semibold tracking-tight">Export</h2>
         <p className="text-muted-foreground">
-          Download a single-sheet workbook in UltraTax CS&apos;s Trial Balance
-          Import layout for{" "}
-          <span className="font-medium text-foreground">{meta.form}</span>.
+          Download a two-sheet workbook for{" "}
+          <span className="font-medium text-foreground">{meta.form}</span> — a
+          detail sheet and a pivot grouped by tax line.
         </p>
       </div>
 
-      {missingCode > 0 ? (
+      {missingLine > 0 && (
         <Alert variant="warning">
           <TriangleAlert className="h-4 w-4" />
           <AlertTitle>
-            {formatNumber(missingCode)} account{missingCode === 1 ? "" : "s"}{" "}
-            {missingCode === 1 ? "has" : "have"} no tax code
+            {formatNumber(missingLine)} account{missingLine === 1 ? "" : "s"}{" "}
+            {missingLine === 1 ? "has" : "have"} no tax line
           </AlertTitle>
           <AlertDescription>
-            They&apos;ll export with a blank Tax Code and won&apos;t import until
-            assigned. Go back to Review to resolve them, or export as-is.
+            They&apos;ll export under &ldquo;Unassigned.&rdquo; Go back to Review
+            to resolve them, or export as-is.
           </AlertDescription>
         </Alert>
-      ) : (
+      )}
+
+      {conflicts > 0 && (
+        <Alert variant="warning">
+          <TriangleAlert className="h-4 w-4" />
+          <AlertTitle>
+            {formatNumber(conflicts)} account{conflicts === 1 ? "" : "s"} have a
+            section conflict
+          </AlertTitle>
+          <AlertDescription>
+            The assigned tax code&apos;s section doesn&apos;t match the account
+            number series (e.g. an asset-numbered account mapped to an expense
+            line). Go back to Review to confirm or correct them before exporting.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {missingLine === 0 && conflicts === 0 && (
         <Alert variant="info">
           <CheckCircle2 className="h-4 w-4" />
           <AlertDescription>
-            Every account has a tax code.{" "}
+            Every account has a tax line.{" "}
             {inBalance
               ? "The trial balance is in balance."
               : `Note: the trial balance is off by ${formatCurrency(stats.net)}.`}
@@ -173,20 +199,19 @@ export function StepExport({
             </Table>
           </div>
 
-          {/* 5-column preview */}
+          {/* Detail-sheet preview */}
           <div>
             <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-              Preview — exactly the columns UltraTax imports
+              Preview — Sheet 1 “Trial Balance”
             </p>
             <div className="scroll-thin overflow-x-auto rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50">
                     <TableHead>Account Number</TableHead>
-                    <TableHead>Account Description</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead>Tax Code</TableHead>
+                    <TableHead>Account Name</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Tax line</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -194,13 +219,10 @@ export function StepExport({
                     <TableRow key={a.id}>
                       <TableCell className="font-mono text-xs">{a.accountNumber || "—"}</TableCell>
                       <TableCell className="whitespace-nowrap">{a.description}</TableCell>
-                      <TableCell>{a.unit || "—"}</TableCell>
-                      <TableCell className="font-mono">
-                        {a.taxCode || <span className="text-muted-foreground/50">—</span>}
-                      </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {a.amount.toFixed(2)}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap">{a.taxLine}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -219,20 +241,23 @@ export function StepExport({
               <div className="min-w-0">
                 <p className="truncate font-semibold">{exportFileName(entity)}</p>
                 <p className="text-sm text-muted-foreground">
-                  {formatNumber(accounts.length)} accounts · one sheet
+                  {formatNumber(accounts.length)} accounts · two sheets
                 </p>
               </div>
             </div>
 
             <ul className="space-y-1.5 text-sm text-muted-foreground">
               <li className="flex items-center gap-2">
-                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> 5 columns, no extras
+                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Detail:
+                Account # · Name · Amount · Tax line
               </li>
               <li className="flex items-center gap-2">
-                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Official UltraTax tax codes
+                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Pivot grouped
+                by tax line, with subtotals
               </li>
               <li className="flex items-center gap-2">
-                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Import via Utilities ▸ Trial Balance
+                <CheckCircle2 className="h-3.5 w-3.5 text-success" /> Totals net to
+                zero when in balance
               </li>
             </ul>
 
@@ -257,7 +282,7 @@ export function StepExport({
               ) : (
                 <>
                   <Download className="h-4 w-4" />
-                  {done ? "Download again" : "Download for UltraTax"}
+                  {done ? "Download again" : "Download workbook"}
                 </>
               )}
             </Button>

@@ -7,6 +7,7 @@ import type {
   TbAccount,
 } from "./types";
 import { COLUMN_ALIASES, UNASSIGNED } from "./constants";
+import { sectionFromAccountNumber } from "./engine";
 import { makeId } from "./utils";
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,10 @@ export function fileExtension(name: string): string {
 export function isSupportedFile(name: string): boolean {
   const ext = fileExtension(name);
   return CSV_EXT.has(ext) || XLSX_EXT.has(ext);
+}
+
+export function isXlsxFile(name: string): boolean {
+  return XLSX_EXT.has(fileExtension(name));
 }
 
 export async function parseFile(file: File): Promise<ParsedFile> {
@@ -59,29 +64,36 @@ function parseCsv(file: File): Promise<ParsedFile> {
   return file.text().then((text) => parseCsvText(text, file.name));
 }
 
-async function parseXlsx(file: File): Promise<ParsedFile> {
+async function readWorkbook(file: File): Promise<XLSX.WorkBook> {
   const buf = await file.arrayBuffer();
-  let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buf, { type: "array" });
+    return XLSX.read(buf, { type: "array" });
   } catch {
     throw new ParseError("Could not read the Excel file. It may be corrupted.");
   }
-  const sheetName = wb.SheetNames[0];
-  if (!sheetName) throw new ParseError("The workbook has no sheets.");
+}
+
+/** Turn a single named worksheet into the canonical { headers, rows } shape. */
+function worksheetToParsed(
+  wb: XLSX.WorkBook,
+  sheetName: string,
+  fileName: string,
+): ParsedFile {
   const ws = wb.Sheets[sheetName];
+  if (!ws) throw new ParseError(`The tab "${sheetName}" could not be found.`);
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, {
     header: 1,
     raw: false,
     defval: "",
     blankrows: false,
   });
-  if (matrix.length === 0) throw new ParseError("The sheet is empty.");
+  if (matrix.length === 0) throw new ParseError(`The tab "${sheetName}" is empty.`);
 
   const headerIdx = matrix.findIndex(
     (row) => row.filter((c) => String(c ?? "").trim() !== "").length >= 2,
   );
-  if (headerIdx < 0) throw new ParseError("Could not find a header row.");
+  if (headerIdx < 0)
+    throw new ParseError(`Could not find a header row in "${sheetName}".`);
 
   const headers = matrix[headerIdx].map((c) => String(c ?? "").trim());
   const rows: Record<string, string>[] = [];
@@ -100,9 +112,57 @@ async function parseXlsx(file: File): Promise<ParsedFile> {
 
   const cleanHeaders = headers.filter((h) => h.length > 0);
   if (cleanHeaders.length === 0)
-    throw new ParseError("Could not detect any column names.");
-  if (rows.length === 0) throw new ParseError("The sheet has no data rows.");
-  return { fileName: file.name, headers: cleanHeaders, rows };
+    throw new ParseError(`Could not detect column names in "${sheetName}".`);
+  if (rows.length === 0)
+    throw new ParseError(`The tab "${sheetName}" has no data rows.`);
+  return { fileName, headers: cleanHeaders, rows };
+}
+
+/** One worksheet's name plus a rough count of its non-empty rows. */
+export type SheetSummary = { name: string; rows: number };
+
+/**
+ * A workbook opened for tab selection: every sheet's name + row count, plus a
+ * `parseSheet` closure to parse whichever tab the user picks. Lets us ask
+ * "which tab?" before committing to a single sheet (workbooks often carry
+ * extra tabs — adjustments, notes — alongside the trial balance).
+ */
+export type WorkbookSheets = {
+  fileName: string;
+  sheets: SheetSummary[];
+  parseSheet: (sheetName: string) => ParsedFile;
+};
+
+export async function readXlsxSheets(file: File): Promise<WorkbookSheets> {
+  const wb = await readWorkbook(file);
+  if (wb.SheetNames.length === 0)
+    throw new ParseError("The workbook has no sheets.");
+  const sheets: SheetSummary[] = wb.SheetNames.map((name) => {
+    const ws = wb.Sheets[name];
+    const matrix = ws
+      ? XLSX.utils.sheet_to_json<unknown[]>(ws, {
+          header: 1,
+          defval: "",
+          blankrows: false,
+        })
+      : [];
+    const rows = matrix.filter((r) =>
+      r.some((c) => String(c ?? "").trim() !== ""),
+    ).length;
+    return { name, rows };
+  });
+  return {
+    fileName: file.name,
+    sheets,
+    parseSheet: (sheetName) => worksheetToParsed(wb, sheetName, file.name),
+  };
+}
+
+async function parseXlsx(file: File): Promise<ParsedFile> {
+  const wb = await readWorkbook(file);
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) throw new ParseError("The workbook has no sheets.");
+  return worksheetToParsed(wb, sheetName, file.name);
 }
 
 function stringifyRow(r: Record<string, unknown>): Record<string, string> {
@@ -185,7 +245,7 @@ export type NormalizeOptions = {
 /**
  * Turn parsed rows into normalized accounts. `amount` is the signed net balance
  * (debit positive, credit negative) — the canonical trial-balance convention,
- * carried straight to the UltraTax import Amount column.
+ * carried straight to the export Amount column.
  */
 export function normalize(
   parsed: ParsedFile,
@@ -215,9 +275,11 @@ export function normalize(
     }
     const amount = debit - credit;
 
+    const accountNumber =
+      (mapping.accountNumber && row[mapping.accountNumber]) || "";
     accounts.push({
       id: makeId("acct"),
-      accountNumber: (mapping.accountNumber && row[mapping.accountNumber]) || "",
+      accountNumber,
       description: description.trim(),
       debit,
       credit,
@@ -225,7 +287,9 @@ export function normalize(
       unit: "",
       taxLine: UNASSIGNED,
       taxCode: "",
-      section: "",
+      // Seed the section from the chart-of-accounts number; the rule engine
+      // refines it when an account maps to a tax line.
+      section: sectionFromAccountNumber(accountNumber),
       confidence: "low",
       method: "rule",
       note: "",

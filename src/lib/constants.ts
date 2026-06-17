@@ -1,24 +1,22 @@
 import type { EntityType, Section, TaxConfig, TaxLine } from "./types";
 
 // ---------------------------------------------------------------------------
-// Tax-code seeds. Codes are the official UltraTax CS / CS Professional Suite
-// "Tax Code Listing for Chart of Accounts Setup" values (1065, 1120S, 1120) and
-// the 1040 listing (Schedule E). They route a GL account to a specific form
-// line on import. Everything here is editable by the firm — nothing is fixed.
+// Tax-code seeds. Codes are the standard "Tax Code Listing for Chart of
+// Accounts Setup" values (1065, 1120S, 1120) and the 1040 listing (Schedule E).
+// They route a GL account to a specific form line. Everything here is editable
+// by the firm — nothing is fixed.
 //
-// Sources:
-//   thomsonreuters.com .../cross-product/files/tax-code-listing-2024.pdf
-//   (Rental real estate income/expense uses the Rent & Royalty schedule, which
-//    flows to Form 8825 for 1065/1120S returns.)
+// (Rental real estate income/expense uses the Rent & Royalty schedule, which
+//  flows to Form 8825 for 1065/1120S returns.)
 // ---------------------------------------------------------------------------
 
-export const CONFIG_VERSION = 2;
-export const STORAGE_KEY = "ledgerlens.taxconfig.v2";
+export const CONFIG_VERSION = 3;
+export const STORAGE_KEY = "ledgerlens.taxconfig.v3";
 
 /** Special, non-tax-line outcomes/buckets. */
 export const UNASSIGNED = "Unassigned"; // rules found no match
 export const REVIEW = "Needs Review"; // two+ lines collided
-export const EXCLUDE = "Do not import"; // map to UltraTax 99999 (skip on import)
+export const EXCLUDE = "Do not import"; // maps to code 99999 (skip on import)
 export const EXCLUDE_CODE = "99999";
 
 export const DEFAULT_WEAK_TOKENS = [
@@ -73,10 +71,20 @@ export function entityMeta(id: EntityType): EntityMeta {
 type Seed = [string, string, Section, string, string[]];
 
 // --- Shared rental real estate income/expense (Form 8825) -------------------
-// Identical UltraTax codes 502–515 across 1065 / 1120S / 1120 (Rent & Royalty).
+// The tax code is the stable key: per the standard "Tax Code Listing for Chart
+// of Accounts Setup", a code routes a GL account to a form line, and the
+// code→line mapping is maintained as the forms change — so the code is what we
+// assign, and the formLine below is just a human label. Those labels reflect
+// the Form 8825 (Rev. December 2025) layout, which reordered the expense lines
+// (Interest L8 / Legal L9 / Real estate taxes L10 / Repairs L11) and moved
+// "Other" to Line 17 (Schedule A). Shared across 1065 / 1120S / 1120 (Rent &
+// Royalty); codes are identical.
 const RENTAL_8825: Seed[] = [
-  ["Gross rents", "502", "income", "Form 8825, Line 2", [
-    "gross rents", "rental income", "rent income", "rents received", "rental revenue", "rent revenue", "lease income", "rents",
+  ["Gross rents", "502", "income", "Form 8825, Line 2a", [
+    "gross rents", "rental income", "rent income", "rents received", "rental revenue", "rent revenue", "lease income", "rents", "tenant rent", "base rent",
+  ]],
+  ["Other rental income", "590", "income", "Form 8825, Line 2b", [
+    "other rental income", "other income", "laundry", "laundry income", "vending", "vending income", "late fee", "late fees", "application fee", "application fees", "pet fee", "pet rent", "parking income", "storage income", "forfeited deposit", "forfeited deposits",
   ]],
   ["Advertising", "503", "expense", "Form 8825, Line 3", [
     "advertising", "marketing", "promotion", "listing fee",
@@ -85,25 +93,25 @@ const RENTAL_8825: Seed[] = [
     "auto", "travel", "mileage", "vehicle", "transportation",
   ]],
   ["Cleaning and maintenance", "505", "expense", "Form 8825, Line 5", [
-    "cleaning", "maintenance", "janitorial", "landscaping", "lawn", "pest control", "snow removal", "grounds", "turnover",
+    "cleaning", "maintenance", "repairs and maintenance", "janitorial", "landscaping", "lawn", "lawn care", "pest control", "snow removal", "grounds", "groundskeeping", "turnover",
   ]],
   ["Commissions", "506", "expense", "Form 8825, Line 6", [
-    "commission", "commissions", "leasing commission", "broker fee",
+    "commission", "commissions", "leasing commission", "leasing commissions", "broker fee",
   ]],
   ["Insurance", "507", "expense", "Form 8825, Line 7", [
-    "insurance", "liability insurance", "property insurance", "hazard insurance",
+    "insurance", "liability insurance", "property insurance", "hazard insurance", "flood insurance",
   ]],
-  ["Legal and professional fees", "508", "expense", "Form 8825, Line 8", [
-    "legal", "attorney", "professional fees", "accounting", "bookkeeping", "audit", "tax prep", "cpa", "consulting",
-  ]],
-  ["Interest", "509", "expense", "Form 8825, Line 9", [
+  ["Interest", "509", "expense", "Form 8825, Line 8", [
     "interest", "mortgage interest", "loan interest", "interest expense",
   ]],
-  ["Repairs", "510", "expense", "Form 8825, Line 10", [
-    "repairs", "repair", "repairs and maintenance",
+  ["Legal and professional fees", "508", "expense", "Form 8825, Line 9", [
+    "legal", "attorney", "professional fees", "legal and professional", "accounting", "bookkeeping", "audit", "tax prep", "cpa", "consulting",
   ]],
-  ["Taxes", "511", "expense", "Form 8825, Line 11", [
-    "property tax", "real estate tax", "property taxes", "real estate taxes", "payroll tax", "taxes and licenses", "taxes",
+  ["Real estate taxes", "511", "expense", "Form 8825, Line 10", [
+    "real estate tax", "real estate taxes", "property tax", "property taxes", "taxes",
+  ]],
+  ["Repairs", "510", "expense", "Form 8825, Line 11", [
+    "repairs", "repair",
   ]],
   ["Utilities", "512", "expense", "Form 8825, Line 12", [
     "utilities", "electric", "electricity", "water", "sewer", "trash", "garbage", "gas", "internet", "telephone", "phone",
@@ -112,10 +120,13 @@ const RENTAL_8825: Seed[] = [
     "wages", "salaries", "salary", "payroll", "labor",
   ]],
   ["Depreciation", "514", "expense", "Form 8825, Line 14", [
-    "depreciation", "depreciation expense", "depr",
+    "depreciation", "depreciation expense",
   ]],
-  ["Other expenses", "515", "expense", "Form 8825, Line 15", [
-    "other expenses", "miscellaneous", "supplies", "office", "management fee", "management fees", "hoa", "dues", "bank charges", "service charges", "bank service charges", "licenses", "permits",
+  ["Amortization", "587", "expense", "Form 8825, Line 17 (Sch A)", [
+    "amortization", "amortization expense",
+  ]],
+  ["Other expenses", "515", "expense", "Form 8825, Line 17 (Sch A)", [
+    "other expenses", "supplies", "office supplies", "office", "management fee", "management fees", "property management", "hoa", "dues", "bank charges", "service charges", "bank service charges", "licenses", "permits",
   ]],
 ];
 
