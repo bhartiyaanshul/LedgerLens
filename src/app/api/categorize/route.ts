@@ -1,25 +1,37 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
-import type { CategorizeResultItem, Confidence } from "@/lib/types";
+import type {
+  CategorizeAccount,
+  CategorizeCategory,
+  CategorizeResultItem,
+  Confidence,
+  Section,
+} from "@/lib/types";
+import { COA_RANGES, coaSectionsFromNumber } from "@/lib/constants";
 
 // ---------------------------------------------------------------------------
 // Server-side LLM fallback categorizer.
 //
-//   POST /api/categorize   body: { descriptions: string[], categories: string[] }
-//   ->  [{ index, category, confidence }]
+//   POST /api/categorize
+//     body: { accounts: {name, number?}[], categories: {name, section}[] }
+//     ->   [{ index, category, confidence }]
 //
-// PRIVACY: this route receives ONLY description strings. The client never sends
-// amounts, dates, account numbers, balances, or names beyond what is already in
-// the description. The provider API key lives in server env vars and is read
-// only here — it is never shipped to the browser bundle.
+// Each account is sent with its NAME and its account NUMBER. The number's
+// chart-of-accounts series is an AUTHORITATIVE constraint: the prompt forbids,
+// and this route then rejects, any tax line whose section conflicts with the
+// type the number implies (e.g. an expense line on a 1xxx asset account).
+//
+// PRIVACY: this route receives account NAMES and NUMBERS only. The client never
+// sends amounts, dates, balances, or any other values. The provider API key
+// lives in server env vars and is read only here — never shipped to the browser.
 // ---------------------------------------------------------------------------
 
 export const runtime = "nodejs"; // the provider SDKs need the Node runtime
 export const maxDuration = 30; // bound a single batch well under Vercel limits
 
 const CONFIDENCES: Confidence[] = ["high", "medium", "low"];
-const MAX_DESCRIPTIONS = 60; // a single batch; the client sends ~30–40
+const MAX_ACCOUNTS = 60; // a single batch; the client sends ~30–40
 
 type Provider = "groq" | "gemini";
 
@@ -57,22 +69,43 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
   }
 }
 
-function buildPrompt(descriptions: string[], validCategories: string[]): string {
-  const listed = descriptions.map((d, i) => `${i}. ${d}`).join("\n");
+function buildPrompt(
+  accounts: CategorizeAccount[],
+  categories: CategorizeCategory[],
+): string {
+  // The COA convention comes from the tunable table in constants.ts, never
+  // hardcoded here, so a firm can adjust the ranges without touching the prompt.
+  const convention = COA_RANGES.map(
+    (r) => `  ${r.range[0]}–${r.range[1]} → ${r.label} (${r.sections.join(" or ")})`,
+  ).join("\n");
+  const catLines = categories
+    .map((c) => `- ${c.name}  [${c.section}]`)
+    .join("\n");
+  const listed = accounts
+    .map((a, i) => `${i}. ${a.number ? `[#${a.number}] ` : ""}${a.name}`)
+    .join("\n");
   return [
-    "You are an accounting assistant for a Chartered Accountant.",
-    "Categorise each bank-transaction description into EXACTLY ONE of these",
-    "expense heads (use these names verbatim — do not invent new categories):",
-    validCategories.map((c) => `- ${c}`).join("\n"),
+    "You categorize general-ledger (chart-of-accounts) accounts onto US tax-return lines.",
     "",
-    'Use "Others" only when nothing genuinely fits.',
+    "Each account is given as its NUMBER (in brackets) and NAME. In a standard chart of accounts the account number's leading digit encodes the account TYPE. This is AUTHORITATIVE — it outranks any hint from the name:",
+    convention,
+    "",
+    "Rules:",
+    "- Derive the account's statement section from its number using the table above.",
+    "- Choose EXACTLY ONE tax line whose section matches that type.",
+    "- NEVER pick a line from a conflicting section (e.g. never put an expense or income line on a 1xxx asset account). Such an answer is wrong and will be rejected.",
+    '- If no listed line of the correct section fits, answer "Others".',
+    "- Use the line names verbatim; do not invent new ones.",
+    "",
+    "Available tax lines (name and its section in brackets):",
+    catLines,
+    "",
     "Set confidence to high/medium/low based on how certain you are.",
+    'Return JSON of the form:',
+    '{ "results": [ { "index": <number>, "category": "<exact tax-line name or Others>", "confidence": "high|medium|low" } ] }',
+    "Include one result object per account, using the index shown.",
     "",
-    "Return JSON of the form:",
-    '{ "results": [ { "index": <number>, "category": "<one of the heads>", "confidence": "high|medium|low" } ] }',
-    "Include one result object per transaction, using the index shown.",
-    "",
-    "Transactions:",
+    "Accounts:",
     listed,
   ].join("\n");
 }
@@ -80,8 +113,8 @@ function buildPrompt(descriptions: string[], validCategories: string[]): string 
 // --- Groq (OpenAI-compatible) ----------------------------------------------
 
 async function categorizeWithGroq(
-  descriptions: string[],
-  validCategories: string[],
+  accounts: CategorizeAccount[],
+  categories: CategorizeCategory[],
 ): Promise<RawResult[]> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new ConfigError("GROQ_API_KEY is not set on the server.");
@@ -97,7 +130,7 @@ async function categorizeWithGroq(
       model,
       temperature: 0,
       // JSON mode is supported across Groq's rotating catalog; we enforce the
-      // category enum ourselves server-side after parsing.
+      // category enum and the COA section constraint ourselves after parsing.
       response_format: { type: "json_object" },
       messages: [
         {
@@ -105,7 +138,7 @@ async function categorizeWithGroq(
           content:
             "You output only valid JSON. Never wrap it in markdown fences.",
         },
-        { role: "user", content: buildPrompt(descriptions, validCategories) },
+        { role: "user", content: buildPrompt(accounts, categories) },
       ],
     }),
   );
@@ -117,8 +150,9 @@ async function categorizeWithGroq(
 // --- Google Gemini ----------------------------------------------------------
 
 async function categorizeWithGemini(
-  descriptions: string[],
-  validCategories: string[],
+  accounts: CategorizeAccount[],
+  categories: CategorizeCategory[],
+  categoryNames: string[],
 ): Promise<RawResult[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new ConfigError("GEMINI_API_KEY is not set on the server.");
@@ -142,7 +176,7 @@ async function categorizeWithGemini(
                 category: {
                   type: SchemaType.STRING,
                   format: "enum",
-                  enum: validCategories,
+                  enum: categoryNames,
                 },
                 confidence: {
                   type: SchemaType.STRING,
@@ -160,7 +194,7 @@ async function categorizeWithGemini(
   });
 
   const resp = await withRetry(() =>
-    model.generateContent(buildPrompt(descriptions, validCategories)),
+    model.generateContent(buildPrompt(accounts, categories)),
   );
   return parseModelJson(resp.response.text());
 }
@@ -218,6 +252,46 @@ function sanitizeResults(
   return out;
 }
 
+const SECTIONS: Section[] = ["income", "expense", "asset", "liability", "equity"];
+
+function isAccount(v: unknown): v is CategorizeAccount {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.name === "string" &&
+    (o.number == null || typeof o.number === "string" || typeof o.number === "number")
+  );
+}
+
+function isCategory(v: unknown): v is CategorizeCategory {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.name === "string" && SECTIONS.includes(o.section as Section);
+}
+
+/**
+ * Final, authoritative guard: reject any pick whose section conflicts with the
+ * account number's chart-of-accounts series. A rejected pick is turned into
+ * "Others" so the client leaves the row for manual review rather than trusting
+ * a cross-section answer the model shouldn't have given.
+ */
+function enforceCoaSections(
+  results: CategorizeResultItem[],
+  accounts: CategorizeAccount[],
+  categories: CategorizeCategory[],
+): CategorizeResultItem[] {
+  const sectionByName = new Map(categories.map((c) => [c.name, c.section]));
+  return results.map((r) => {
+    const acct = accounts[r.index];
+    const allowed = acct ? coaSectionsFromNumber(acct.number ?? "") : [];
+    const sec = sectionByName.get(r.category);
+    if (allowed.length > 0 && sec && !allowed.includes(sec)) {
+      return { index: r.index, category: "Others", confidence: "low" };
+    }
+    return r;
+  });
+}
+
 export async function POST(req: Request) {
   let body: unknown;
   try {
@@ -226,52 +300,59 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const { descriptions, categories } = (body ?? {}) as {
-    descriptions?: unknown;
+  const { accounts, categories } = (body ?? {}) as {
+    accounts?: unknown;
     categories?: unknown;
   };
 
-  if (
-    !Array.isArray(descriptions) ||
-    descriptions.some((d) => typeof d !== "string")
-  ) {
+  if (!Array.isArray(accounts) || !accounts.every(isAccount)) {
     return NextResponse.json(
-      { error: "`descriptions` must be an array of strings." },
+      { error: "`accounts` must be an array of { name, number? } objects." },
       { status: 400 },
     );
   }
   if (
     !Array.isArray(categories) ||
     categories.length === 0 ||
-    categories.some((c) => typeof c !== "string")
+    !categories.every(isCategory)
   ) {
     return NextResponse.json(
-      { error: "`categories` must be a non-empty array of strings." },
+      { error: "`categories` must be a non-empty array of { name, section } objects." },
       { status: 400 },
     );
   }
-  if (descriptions.length === 0) {
+  if (accounts.length === 0) {
     return NextResponse.json([] satisfies CategorizeResultItem[]);
   }
-  if (descriptions.length > MAX_DESCRIPTIONS) {
+  if (accounts.length > MAX_ACCOUNTS) {
     return NextResponse.json(
-      { error: `Send at most ${MAX_DESCRIPTIONS} descriptions per request.` },
+      { error: `Send at most ${MAX_ACCOUNTS} accounts per request.` },
       { status: 400 },
     );
   }
 
-  // Always allow "Others" so the model has an escape hatch.
-  const validCategories = Array.from(
-    new Set([...(categories as string[]).map((c) => c.trim()).filter(Boolean), "Others"]),
-  );
+  // De-dupe the candidate lines and always allow "Others" as an escape hatch.
+  const seen = new Set<string>();
+  const validCategories: CategorizeCategory[] = [];
+  for (const c of categories) {
+    const name = c.name.trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    validCategories.push({ name, section: c.section });
+  }
+  const categoryNames = [...validCategories.map((c) => c.name), "Others"];
 
   try {
     const provider = getProvider();
     const raw =
       provider === "gemini"
-        ? await categorizeWithGemini(descriptions as string[], validCategories)
-        : await categorizeWithGroq(descriptions as string[], validCategories);
-    const results = sanitizeResults(raw, descriptions.length, validCategories);
+        ? await categorizeWithGemini(accounts, validCategories, categoryNames)
+        : await categorizeWithGroq(accounts, validCategories);
+    const results = enforceCoaSections(
+      sanitizeResults(raw, accounts.length, categoryNames),
+      accounts,
+      validCategories,
+    );
     return NextResponse.json(results);
   } catch (err) {
     if (err instanceof ConfigError) {

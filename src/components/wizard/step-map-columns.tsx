@@ -121,6 +121,23 @@ export function StepMapColumns({
           <span className="font-medium text-foreground">{parsed.fileName}</span>.
           Confirm them — the Account Description and a balance are required.
         </p>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 shrink-0" />
+          {parsed.headerDetected ? (
+            <span>
+              Header row detected
+              {parsed.headerRowCount > 1
+                ? ` (${parsed.headerRowCount} stacked rows merged)`
+                : ""}
+              .
+            </span>
+          ) : (
+            <span>
+              No header row detected — columns were named by position. Confirm
+              the mapping below.
+            </span>
+          )}
+        </p>
       </div>
 
       <div className="space-y-2">

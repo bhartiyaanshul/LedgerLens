@@ -93,9 +93,22 @@ export type ParsedFile = {
   fileName: string;
   headers: string[];
   rows: Record<string, string>[];
+  /** Whether a header row was detected (false → columns named by position). */
+  headerDetected: boolean;
+  /** How many rows were merged into the header (e.g. 2 for a stacked header). */
+  headerRowCount: number;
 };
 
-// --- LLM API contract (server route is generic: descriptions + categories) --
+// --- LLM API contract -------------------------------------------------------
+// The route receives, per account, its NAME and NUMBER, plus the candidate tax
+// lines tagged with their statement section. The account number's chart-of-
+// accounts series is an authoritative constraint on the answer (see route.ts).
+
+/** One account sent to the categorizer: its name and (optional) GL number. */
+export type CategorizeAccount = { name: string; number?: string | null };
+
+/** A candidate tax line the model may choose, tagged with its section. */
+export type CategorizeCategory = { name: string; section: Section };
 
 export type CategorizeResultItem = {
   index: number;

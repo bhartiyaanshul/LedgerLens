@@ -31,6 +31,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 
+# test build output (npm test)
+/.testbuild
+
 # local editor / agent tooling
 .claude/
 

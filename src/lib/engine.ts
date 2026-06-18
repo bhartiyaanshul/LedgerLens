@@ -1,5 +1,11 @@
 import type { Confidence, Section, TaxLine, TbAccount } from "./types";
-import { EXCLUDE, REVIEW, UNASSIGNED } from "./constants";
+import {
+  coaCategoryFromNumber,
+  coaSectionsFromNumber,
+  EXCLUDE,
+  REVIEW,
+  UNASSIGNED,
+} from "./constants";
 import { normalizeName } from "./normalize";
 
 // ---------------------------------------------------------------------------
@@ -15,14 +21,15 @@ import { normalizeName } from "./normalize";
 //      ("depreciation"), which in turn beats a weak/generic token ("fee").
 //
 //   2. The ACCOUNT NUMBER — the firm's chart-of-accounts series encodes the
-//      statement section (1xxxx asset, 2xxx liability, 3xxx capital, 4xxx
-//      income, 5xxx+ expense). We fold this in as a first-class SCORING PRIOR:
-//      a candidate in the section the number implies is boosted; one in a
-//      conflicting section is penalized. This is what lets "1700 Prepaid
-//      Insurance" land on the asset line (Other current assets) instead of the
-//      Insurance *expense* line whose keyword also matches.
+//      statement section (1xxx asset, 2xxx liability, 3xxx equity, 4xxx income,
+//      5xxx–9xxx expense/other; see COA_RANGES in constants.ts). We treat this
+//      as an AUTHORITATIVE CONSTRAINT: when a number is present we first FILTER
+//      the candidate tax lines down to those whose section the number allows,
+//      and only THEN run keyword matching. This is what lets "1700 Prepaid
+//      Insurance" land on the asset line (Other current assets) — the Insurance
+//      *expense* line is filtered out before scoring, so it can never win.
 //
-// The best-scoring line wins. A clear margin -> high confidence; a thin margin
+// The best-scoring surviving line wins. A clear margin -> high confidence; a thin margin
 // or a weak-token-only match -> medium (with the runner-up noted); a genuine
 // tie between different lines -> Needs Review; nothing above the floor ->
 // Unassigned. Everything runs client-side; only the leftovers go to the LLM.
@@ -55,11 +62,8 @@ export type CompiledRules = {
 };
 
 // --- Scoring constants ------------------------------------------------------
-// A candidate in the account number's section gets +SECTION_BONUS; one in a
-// conflicting section gets -SECTION_PENALTY. The penalty exceeds any single
-// token's weight, so a cross-section keyword match can never silently win.
-const SECTION_BONUS = 5;
-const SECTION_PENALTY = 7;
+// The account-number section is enforced as a hard pre-filter (see scoreLines),
+// not a score adjustment, so only the keyword signals below set the score.
 // A second/third matching keyword on the same line adds a little, capped, so a
 // line can't win on sheer keyword count alone.
 const EXTRA_MATCH_BONUS = 0.5;
@@ -134,14 +138,21 @@ type Candidate = {
   weakOnly: boolean;
 };
 
-/** Score every line that has at least one keyword match against the name. */
+/**
+ * Score every line that has at least one keyword match against the name.
+ * `allowed`, when non-null, is the authoritative set of statement sections the
+ * account number permits — lines outside it are dropped BEFORE keyword scoring,
+ * so a cross-section keyword match can never win.
+ */
 function scoreLines(
   normalizedName: string,
-  numSection: Section | "",
+  allowed: Set<Section> | null,
   rules: CompiledRules,
 ): Candidate[] {
   const out: Candidate[] = [];
   for (const line of rules.lines) {
+    if (allowed && !allowed.has(line.section)) continue; // COA hard filter
+
     let bestKeyword: string | null = null;
     let bestWeight = 0;
     let matches = 0;
@@ -164,11 +175,8 @@ function scoreLines(
     }
     if (matches === 0 || bestKeyword === null) continue;
 
-    let score =
+    const score =
       bestWeight + Math.min(EXTRA_MATCH_CAP, (matches - 1) * EXTRA_MATCH_BONUS);
-    if (numSection && line.section === numSection) score += SECTION_BONUS;
-    else if (numSection && line.section !== numSection) score -= SECTION_PENALTY;
-
     out.push({ line, bestKeyword, score, weakOnly: !anyStrong });
   }
   out.sort((a, b) => b.score - a.score);
@@ -185,26 +193,27 @@ export function classify(
   accountNumber = "",
 ): Classification {
   const text = normalizeName(description);
-  const numSection = sectionFromAccountNumber(accountNumber);
-  const candidates = scoreLines(text, numSection, rules);
+  // The account number's series is an authoritative constraint: when present,
+  // only tax lines in the allowed section(s) are eligible.
+  const coa = coaCategoryFromNumber(accountNumber);
+  const allowed = coa ? new Set(coa.sections) : null;
+  const candidates = scoreLines(text, allowed, rules);
 
-  const unassigned: Classification = {
-    taxLine: UNASSIGNED,
-    code: "",
-    section: "",
-    confidence: "low",
-    note: "no match",
-  };
+  // Audit: note which COA category constrained the candidate set, so the
+  // preparer can see why a line was eligible (or why nothing matched).
+  const coaTag = coa ? ` · acct #→${coa.label} (constraint)` : "";
 
-  if (candidates.length === 0) return unassigned;
-
-  const best = candidates[0];
-  // Nothing cleared the floor (e.g. the only match was a wrong-section token
-  // penalized below zero) — safer to leave it for the reviewer / LLM.
-  if (best.score <= 0) {
-    return { ...unassigned, note: "no confident match" };
+  if (candidates.length === 0) {
+    return {
+      taxLine: UNASSIGNED,
+      code: "",
+      section: "",
+      confidence: "low",
+      note: `no match${coaTag}`,
+    };
   }
 
+  const best = candidates[0];
   const runnerUp = candidates.find((c) => c.line.name !== best.line.name);
   const margin = best.score - (runnerUp ? runnerUp.score : -Infinity);
 
@@ -222,7 +231,7 @@ export function classify(
       code: "",
       section: "",
       confidence: "low",
-      note: `ambiguous: ${names.join(", ")}`,
+      note: `ambiguous: ${names.join(", ")}${coaTag}`,
     };
   }
 
@@ -233,9 +242,9 @@ export function classify(
       : "medium";
 
   const note =
-    runnerUp && margin < HIGH_MARGIN
+    (runnerUp && margin < HIGH_MARGIN
       ? `matched '${best.bestKeyword}' (also saw: ${runnerUp.line.name})`
-      : `matched '${best.bestKeyword}'`;
+      : `matched '${best.bestKeyword}'`) + coaTag;
 
   return {
     taxLine: best.line.name,
@@ -292,9 +301,11 @@ export function lineByName(
 // --- Account-number → section ----------------------------------------------
 
 /**
- * Infer the statement section from the GL account number using the firm's
- * chart-of-accounts numbering convention:
- *   1xxxx → assets, 2xxx → liabilities, 3xxx → capital/equity,
+ * The single PRIMARY statement section for an account number, used to seed the
+ * by-section grouping of otherwise-unmapped rows (export/pivot). For the
+ * authoritative eligibility constraint (which may allow more than one section,
+ * e.g. 8xxx "other income & expenses"), use {@link coaSectionsFromNumber}.
+ *   1xxx → assets, 2xxx → liabilities, 3xxx → capital/equity,
  *   4xxx → income, 5xxx and above → expense.
  * Returns "" when the account number has no leading digit.
  */
@@ -352,23 +363,22 @@ export const SECTION_LABELS: Record<Section, string> = {
 // --- Account-number guardrail ----------------------------------------------
 
 /**
- * True when the code's section disagrees with the account-number series — the
- * structural test behind both the (now scoring-level) prior and the export-page
- * warning. The section prior already steers most matches to the right side;
- * this is the final net for an automated pick that still landed cross-section
- * (e.g. an LLM result, or a name with no number to read a section from on the
- * matched line). Special buckets and numberless accounts never conflict.
+ * True when the assigned line's section is not among the sections the account
+ * number permits — the structural net behind the export-page warning. The rule
+ * engine already pre-filters to allowed sections, so this mainly catches an LLM
+ * pick (or a manual edit) that landed cross-section. Special buckets and
+ * numberless accounts never conflict.
  */
 export function hasSectionConflict(a: {
   accountNumber: string;
   section: Section | "";
   taxLine: string;
 }): boolean {
-  const numSection = sectionFromAccountNumber(a.accountNumber);
+  const allowed = coaSectionsFromNumber(a.accountNumber);
   return (
-    !!numSection &&
+    allowed.length > 0 &&
     !!a.section &&
-    a.section !== numSection &&
+    !allowed.includes(a.section) &&
     a.taxLine !== UNASSIGNED &&
     a.taxLine !== REVIEW &&
     a.taxLine !== EXCLUDE
@@ -377,10 +387,10 @@ export function hasSectionConflict(a: {
 
 export function flagSectionConflict(a: TbAccount): TbAccount {
   if (!hasSectionConflict(a)) return a;
-  const numSection = sectionFromAccountNumber(a.accountNumber) as Section;
+  const coa = coaCategoryFromNumber(a.accountNumber);
   return {
     ...a,
     confidence: "low",
-    note: `Section conflict — account # → ${SECTION_LABELS[numSection]}, but code ${a.taxCode} → ${SECTION_LABELS[a.section as Section]}; verify`,
+    note: `Section conflict — account # → ${coa?.label ?? "?"}, but ${a.taxLine} (code ${a.taxCode}) → ${SECTION_LABELS[a.section as Section]}; verify`,
   };
 }

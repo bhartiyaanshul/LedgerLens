@@ -230,7 +230,7 @@ export default function Home() {
         <footer className="mx-auto mt-8 max-w-3xl text-center text-xs text-muted-foreground">
           <p>
             The trial balance is parsed and categorized in your browser. Only the
-            account descriptions of low-confidence rows are sent to the AI
+            account name and number of low-confidence rows are sent to the AI
             provider, and only when you enable AI categorization.
           </p>
         </footer>

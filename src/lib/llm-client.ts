@@ -1,20 +1,25 @@
-import type { CategorizeResultItem, Confidence } from "./types";
+import type {
+  CategorizeCategory,
+  CategorizeResultItem,
+  Confidence,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Client-side wrapper around POST /api/categorize.
 //
-// Batches the leftover descriptions (~35 per request), calls the route once per
+// Batches the leftover accounts (~35 per request), calls the route once per
 // batch SEQUENTIALLY (to stay under free-tier RPM limits), reports progress,
 // and tolerates a failed batch — those rows are simply left for manual review.
 //
-// ONLY description strings are sent. Amounts, dates, and account numbers stay
-// in the browser.
+// Each account is sent as its NAME and account NUMBER (the number's series is a
+// strong account-type signal the route enforces). Amounts, dates, and balances
+// stay in the browser.
 // ---------------------------------------------------------------------------
 
 export const LLM_BATCH_SIZE = 35;
 const INTER_BATCH_DELAY_MS = 250;
 
-export type LLMInput = { id: string; description: string };
+export type LLMInput = { id: string; description: string; accountNumber: string };
 
 export type LLMOutcome = {
   /** id -> assigned category & confidence for rows the model placed. */
@@ -40,7 +45,7 @@ function chunk<T>(arr: T[], size: number): T[][] {
 
 export async function categorizeWithAI(
   rows: LLMInput[],
-  categories: string[],
+  categories: CategorizeCategory[],
   opts: {
     onProgress?: (p: LLMProgress) => void;
     signal?: AbortSignal;
@@ -62,7 +67,10 @@ export async function categorizeWithAI(
         headers: { "Content-Type": "application/json" },
         signal: opts.signal,
         body: JSON.stringify({
-          descriptions: batch.map((r) => r.description),
+          accounts: batch.map((r) => ({
+            name: r.description,
+            number: r.accountNumber,
+          })),
           categories,
         }),
       });

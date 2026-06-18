@@ -69,8 +69,13 @@ export function StepCategorize({
     setProgress({ done: 0, total: 0 });
   }, [baseAccounts, lines, weakTokens]);
 
-  const lineNames = useMemo(
-    () => lines.map((l) => l.name.trim()).filter(Boolean),
+  // Candidate tax lines tagged with their statement section, so the route can
+  // hold the model to the account number's chart-of-accounts type.
+  const lineCategories = useMemo(
+    () =>
+      lines
+        .map((l) => ({ name: l.name.trim(), section: l.section }))
+        .filter((c) => c.name),
     [lines],
   );
 
@@ -97,8 +102,12 @@ export function StepCategorize({
     setAiInfo(null);
 
     const outcome = await categorizeWithAI(
-      leftovers.map((a) => ({ id: a.id, description: a.description })),
-      lineNames,
+      leftovers.map((a) => ({
+        id: a.id,
+        description: a.description,
+        accountNumber: a.accountNumber,
+      })),
+      lineCategories,
       { onProgress: setProgress, signal: controller.signal },
     );
 
@@ -108,8 +117,9 @@ export function StepCategorize({
         if (!assignment) return a;
         const line = lineByName(lines, assignment.category);
         if (!line) return a; // model said "Others"/unknown -> leave for manual
-        // Guardrail: the model only sees the account name, so cross-check its
-        // pick against the account-number series before trusting it.
+        // Final net: the route already constrains the model to the account
+        // number's section, but re-check here so a stray cross-section pick is
+        // flagged for review rather than trusted.
         return flagSectionConflict({
           ...a,
           taxLine: line.name,
@@ -185,7 +195,7 @@ export function StepCategorize({
                 Use AI for unmatched accounts
               </Label>
               <p className="max-w-md text-sm text-muted-foreground">
-                Sends only the account descriptions of low-confidence rows to your
+                Sends the account name and number of low-confidence rows to your
                 configured provider. Turn off for sensitive clients.
               </p>
             </div>

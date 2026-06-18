@@ -116,7 +116,7 @@ All variables are **server-only** (no `NEXT_PUBLIC_` prefix), read only inside t
 This app handles **confidential client financial data**.
 
 - The trial balance is **parsed and categorized in your browser**. The raw file is never uploaded.
-- When AI is on, **only the account name/description text** of low-confidence accounts is sent to the LLM — never amounts, balances, or account numbers.
+- When AI is on, **the account name/description and its account number** for low-confidence accounts are sent to the LLM — never amounts, balances, dates, or other values. The account number is sent because its chart-of-accounts series is a strong, authoritative signal of the account's type, which materially improves the suggestion.
 - **Account names can themselves contain client info** (e.g. a property address). Review your chart of accounts before enabling AI.
 - The first time you use AI, a notice explains this and that **free LLM tiers (Groq and Gemini) may train on submitted prompts**. For real client data, use a paid / no-training tier (or **Vertex AI** for Gemini), or keep AI off.
 

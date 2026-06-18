@@ -24,6 +24,76 @@ export const DEFAULT_WEAK_TOKENS = [
   "income", "charge", "charges", "general",
 ];
 
+// ---------------------------------------------------------------------------
+// Chart-of-accounts numbering convention.
+//
+// In a standard chart of accounts the account NUMBER encodes the account TYPE:
+// the leading digit places it in a numeric series. This is a strong — usually
+// authoritative — signal, far more reliable than the account name alone. We
+// keep the range→category table HERE (not inline in the rule engine or the LLM
+// prompt) so a firm can tune it the same way it tunes the tax codes.
+//
+// Each range maps to the statement section(s) a tax line may legitimately use
+// for an account in that series. Most ranges resolve to a single section; the
+// 8000–9999 "other income & expenses" block is intentionally permissive (income
+// OR expense), since both kinds of "other" accounts live there.
+// ---------------------------------------------------------------------------
+
+export type CoaRange = {
+  /** Inclusive [low, high] on the leading-digit series, e.g. 1000–1999. */
+  range: [number, number];
+  /** Human label for the audit trail, e.g. "Assets". */
+  label: string;
+  /** Statement sections a tax line may use for an account in this series. */
+  sections: Section[];
+};
+
+export const COA_RANGES: CoaRange[] = [
+  { range: [1000, 1999], label: "Assets", sections: ["asset"] },
+  { range: [2000, 2999], label: "Liabilities", sections: ["liability"] },
+  { range: [3000, 3999], label: "Equity", sections: ["equity"] },
+  { range: [4000, 4999], label: "Revenue / Income", sections: ["income"] },
+  { range: [5000, 5999], label: "Cost of Goods Sold", sections: ["expense"] },
+  { range: [6000, 7999], label: "Operating Expenses", sections: ["expense"] },
+  { range: [8000, 9999], label: "Other Income & Expenses", sections: ["income", "expense"] },
+];
+
+/**
+ * First significant digit of a GL account number — tolerant of sub-account
+ * decimals ("3000.1001"), thousands separators, currency/whitespace, a leading
+ * sign, and numbers stored as text vs. number. Returns null when there is no
+ * usable (non-zero) leading digit.
+ */
+function leadingDigit(accountNumber: string | number | null | undefined): number | null {
+  const m = String(accountNumber ?? "").match(/[1-9]/);
+  return m ? Number(m[0]) : null;
+}
+
+/**
+ * The chart-of-accounts category implied by an account number's leading digit,
+ * or null when no leading digit is present. The leading digit is mapped to its
+ * thousands series (e.g. 7 → 7000), then looked up in {@link COA_RANGES}.
+ */
+export function coaCategoryFromNumber(
+  accountNumber: string | number | null | undefined,
+): CoaRange | null {
+  const d = leadingDigit(accountNumber);
+  if (d == null) return null;
+  const rep = d * 1000;
+  return COA_RANGES.find((r) => rep >= r.range[0] && rep <= r.range[1]) ?? null;
+}
+
+/**
+ * The statement section(s) a tax line may use for this account number — the
+ * authoritative constraint applied by the rule engine and the LLM route. Empty
+ * when the number has no leading digit (so the constraint simply doesn't apply).
+ */
+export function coaSectionsFromNumber(
+  accountNumber: string | number | null | undefined,
+): Section[] {
+  return coaCategoryFromNumber(accountNumber)?.sections ?? [];
+}
+
 export type EntityMeta = {
   id: EntityType;
   label: string;

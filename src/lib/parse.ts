@@ -44,20 +44,17 @@ export async function parseFile(file: File): Promise<ParsedFile> {
 }
 
 export function parseCsvText(text: string, fileName: string): ParsedFile {
-  const result = Papa.parse<Record<string, string>>(text, {
-    header: true,
+  // Parse as a raw matrix (header:false) and let matrixToParsed decide whether
+  // the first row is a header — a CSV can be headerless too.
+  const result = Papa.parse<string[]>(text, {
+    header: false,
     skipEmptyLines: "greedy",
-    transformHeader: (h) => h.trim(),
   });
-  const headers = (result.meta.fields ?? []).filter((h) => h.length > 0);
-  if (headers.length === 0) {
-    throw new ParseError("No columns found. Is this a valid CSV file?");
+  const matrix = (result.data ?? []).filter((r) => Array.isArray(r));
+  if (matrix.length === 0) {
+    throw new ParseError("No rows found. Is this a valid CSV file?");
   }
-  const rows = (result.data ?? [])
-    .map((r) => stringifyRow(r))
-    .filter((r) => Object.values(r).some((v) => v.trim() !== ""));
-  if (rows.length === 0) throw new ParseError("The file has no data rows.");
-  return { fileName, headers, rows };
+  return matrixToParsed(matrix, fileName);
 }
 
 function parseCsv(file: File): Promise<ParsedFile> {
@@ -74,7 +71,7 @@ async function readWorkbook(file: File): Promise<XLSX.WorkBook> {
 }
 
 /** Turn a single named worksheet into the canonical { headers, rows } shape. */
-function worksheetToParsed(
+export function worksheetToParsed(
   wb: XLSX.WorkBook,
   sheetName: string,
   fileName: string,
@@ -88,34 +85,235 @@ function worksheetToParsed(
     blankrows: false,
   });
   if (matrix.length === 0) throw new ParseError(`The tab "${sheetName}" is empty.`);
+  return matrixToParsed(matrix, fileName);
+}
 
-  const headerIdx = matrix.findIndex(
-    (row) => row.filter((c) => String(c ?? "").trim() !== "").length >= 2,
-  );
-  if (headerIdx < 0)
-    throw new ParseError(`Could not find a header row in "${sheetName}".`);
+// ---------------------------------------------------------------------------
+// Header detection
+//
+// We can't assume row 0 is the header: real trial balances start with a stacked
+// header ("Ending" over "Balance"), extra title rows, or no header at all. So we
+// SCORE the first non-blank row. A header row is text labels with NO parseable
+// amount or account number in it (and scores higher for known label words like
+// "Balance"/"Debit"); a data row carries a signed amount — incl. "(1,234.00)"
+// or a "-" zero — and/or a chart-of-accounts number like 4500.10. If the top row
+// scores as a header we take it (merging immediately-following label-only rows
+// into one multi-line header); if it scores as data we treat the sheet as
+// headerless and synthesize column names from each column's own content. Either
+// way the first data row is never consumed as a header.
+// ---------------------------------------------------------------------------
 
-  const headers = matrix[headerIdx].map((c) => String(c ?? "").trim());
-  const rows: Record<string, string>[] = [];
-  for (let i = headerIdx + 1; i < matrix.length; i++) {
-    const raw = matrix[i];
-    const obj: Record<string, string> = {};
-    let nonEmpty = false;
-    headers.forEach((h, j) => {
-      if (!h) return;
-      const v = String(raw[j] ?? "").trim();
-      obj[h] = v;
-      if (v !== "") nonEmpty = true;
-    });
-    if (nonEmpty) rows.push(obj);
+const MAX_HEADER_ROWS = 3; // cap on a stacked/wrapped header
+
+/** Known header words — their presence is strong evidence of a header row. */
+const HEADER_LABEL_TOKENS = new Set([
+  "account", "accounts", "acct", "no", "number", "code", "description",
+  "name", "title", "particulars", "balance", "ending", "beginning", "opening",
+  "closing", "debit", "debits", "credit", "credits", "amount", "net", "total",
+  "gl", "ledger", "dr", "cr", "unit", "activity",
+]);
+
+/** A chart-of-accounts number like 123, 4500, or 3000.1001 (no separators). */
+const ACCOUNT_NUM_RE = /^\d{3,5}(\.\d+)?$/;
+
+function cellText(c: unknown): string {
+  return String(c ?? "").trim();
+}
+
+function isAccountNumberToken(s: string): boolean {
+  return ACCOUNT_NUM_RE.test(s.trim());
+}
+
+/**
+ * Does this cell read as a money amount? Accepts parenthesized negatives
+ * "(1,234.00)", a lone "-" (the accounting zero), currency symbols, and
+ * thousands separators — distinct from an account number, which has none.
+ */
+function looksLikeAmount(s: string): boolean {
+  let t = s.trim();
+  if (t === "") return false;
+  if (/^[-–—]$/.test(t)) return true; // dash = zero
+  t = t.replace(/^\((.*)\)$/, "$1").trim(); // unwrap (negative)
+  t = t.replace(/[$£€,\s]/g, "").replace(/^[-+]/, ""); // strip currency, commas, sign
+  return /^\d+(\.\d+)?$/.test(t);
+}
+
+/** True when a cell carries letters — a textual label or account name. */
+function hasLetters(s: string): boolean {
+  return /[a-z]/i.test(s);
+}
+
+function isBlankRow(row: unknown[]): boolean {
+  return row.every((c) => cellText(c) === "");
+}
+
+/** A row whose every non-empty cell is a clean text label (no values). */
+function isLabelOnlyRow(row: unknown[]): boolean {
+  let any = false;
+  for (const cell of row) {
+    const s = cellText(cell);
+    if (s === "") continue;
+    if (isAccountNumberToken(s) || looksLikeAmount(s) || !hasLetters(s)) return false;
+    any = true;
+  }
+  return any;
+}
+
+/**
+ * Header-likeness of a row: text labels push it positive (recognized header
+ * words more so), while any amount or account-number pushes it negative. A
+ * positive score means "header"; zero or negative means "data".
+ */
+function scoreHeaderRow(row: unknown[]): number {
+  let score = 0;
+  let nonEmpty = 0;
+  for (const cell of row) {
+    const s = cellText(cell);
+    if (s === "") continue;
+    nonEmpty += 1;
+    if (isAccountNumberToken(s) || looksLikeAmount(s)) {
+      score -= 3; // a value → this is data, not a header
+    } else if (hasLetters(s)) {
+      score += 1;
+      const words = s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ");
+      if (words.some((w) => HEADER_LABEL_TOKENS.has(w))) score += 2;
+    }
+  }
+  return nonEmpty === 0 ? 0 : score;
+}
+
+type HeaderDetection = { headerRows: number[]; dataStart: number };
+
+/** Decide which leading rows (if any) form the header; where data begins. */
+function detectHeader(matrix: unknown[][]): HeaderDetection {
+  let start = 0;
+  while (start < matrix.length && isBlankRow(matrix[start])) start++;
+  if (start >= matrix.length) return { headerRows: [], dataStart: matrix.length };
+
+  // Top non-blank row scores as data → headerless; don't drop it.
+  if (scoreHeaderRow(matrix[start]) <= 0) {
+    return { headerRows: [], dataStart: start };
   }
 
-  const cleanHeaders = headers.filter((h) => h.length > 0);
-  if (cleanHeaders.length === 0)
-    throw new ParseError(`Could not detect column names in "${sheetName}".`);
-  if (rows.length === 0)
-    throw new ParseError(`The tab "${sheetName}" has no data rows.`);
-  return { fileName, headers: cleanHeaders, rows };
+  // It's a header. Absorb immediately-following label-only rows (a wrapped or
+  // stacked header such as "Ending" over "Balance"), capped for safety.
+  let end = start;
+  while (
+    end + 1 < matrix.length &&
+    end + 1 - start < MAX_HEADER_ROWS &&
+    isLabelOnlyRow(matrix[end + 1])
+  ) {
+    end++;
+  }
+  const headerRows: number[] = [];
+  for (let i = start; i <= end; i++) headerRows.push(i);
+  return { headerRows, dataStart: end + 1 };
+}
+
+/**
+ * A totals/summary row carries values but nothing that identifies an account —
+ * no text label and no account number (e.g. a trailing "(0.00)"). Dropping it
+ * keeps it out of the account list and the preview.
+ */
+function isTotalsRow(row: unknown[]): boolean {
+  let any = false;
+  for (const cell of row) {
+    const s = cellText(cell);
+    if (s === "") continue;
+    any = true;
+    if (hasLetters(s) || isAccountNumberToken(s)) return false; // identifying → keep
+  }
+  return any;
+}
+
+/**
+ * Name an unlabeled column from its own data so column auto-detection still
+ * works. Canonical names match COLUMN_ALIASES. Returns null for a column with no
+ * data at all (it gets dropped), or a positional fallback when content is mixed.
+ */
+function synthesizeColumnName(values: string[], colIndex: number): string | null {
+  const nonEmpty = values.filter((v) => v !== "");
+  if (nonEmpty.length === 0) return null;
+  let acct = 0;
+  let amount = 0;
+  let text = 0;
+  for (const v of nonEmpty) {
+    if (isAccountNumberToken(v)) acct++; // account numbers also look like amounts,
+    else if (looksLikeAmount(v)) amount++; // so test them first
+    else if (hasLetters(v)) text++;
+  }
+  const n = nonEmpty.length;
+  if (text / n >= 0.5) return "Account Description";
+  if (acct / n >= 0.6) return "Account Number";
+  if (amount / n >= 0.6) return "Balance";
+  return `Column ${colIndex + 1}`;
+}
+
+/**
+ * Turn a raw cell matrix into the canonical { headers, rows } shape, deciding
+ * for itself where the header is (or that there isn't one).
+ */
+export function matrixToParsed(
+  matrix: unknown[][],
+  fileName: string,
+): ParsedFile {
+  if (matrix.length === 0) throw new ParseError(`"${fileName}" is empty.`);
+  const width = matrix.reduce((w, r) => Math.max(w, r.length), 0);
+  if (width === 0) throw new ParseError(`"${fileName}" has no columns.`);
+
+  const { headerRows, dataStart } = detectHeader(matrix);
+
+  // Data rows: drop fully-blank rows and amount-only totals lines.
+  const dataRows: unknown[][] = [];
+  for (let i = dataStart; i < matrix.length; i++) {
+    const row = matrix[i];
+    if (isBlankRow(row) || isTotalsRow(row)) continue;
+    dataRows.push(row);
+  }
+
+  // Build a name for every column: merge any header-row labels, else synthesize
+  // from the column's content. Keep names unique and drop wholly-empty columns.
+  const headers: string[] = [];
+  const keptCols: number[] = [];
+  const used = new Set<string>();
+  for (let c = 0; c < width; c++) {
+    const label = headerRows
+      .map((r) => cellText(matrix[r]?.[c]))
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    let name = label || synthesizeColumnName(dataRows.map((r) => cellText(r[c])), c);
+    if (name === null) continue; // empty column, no header → drop
+    if (used.has(name.toLowerCase())) {
+      let n = 2;
+      while (used.has(`${name} ${n}`.toLowerCase())) n++;
+      name = `${name} ${n}`;
+    }
+    used.add(name.toLowerCase());
+    headers.push(name);
+    keptCols.push(c);
+  }
+
+  if (headers.length === 0)
+    throw new ParseError(`Could not detect any columns in "${fileName}".`);
+
+  const rows: Record<string, string>[] = dataRows.map((row) => {
+    const obj: Record<string, string> = {};
+    keptCols.forEach((c, j) => {
+      obj[headers[j]] = cellText(row[c]);
+    });
+    return obj;
+  });
+
+  if (rows.length === 0) throw new ParseError(`"${fileName}" has no data rows.`);
+
+  return {
+    fileName,
+    headers,
+    rows,
+    headerDetected: headerRows.length > 0,
+    headerRowCount: headerRows.length,
+  };
 }
 
 /** One worksheet's name plus a rough count of its non-empty rows. */
@@ -165,18 +363,24 @@ async function parseXlsx(file: File): Promise<ParsedFile> {
   return worksheetToParsed(wb, sheetName, file.name);
 }
 
-function stringifyRow(r: Record<string, unknown>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(r)) {
-    if (k.trim() === "") continue;
-    out[k.trim()] = v == null ? "" : String(v).trim();
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // Column auto-detection
 // ---------------------------------------------------------------------------
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Does `alias` appear in `headerLower` as a whole token (delimited by
+ * non-alphanumerics or string ends)? Token-boundary — not raw substring — so a
+ * short alias like "cr" matches "Net Cr" but never "Des**cr**iption".
+ */
+function tokenMatch(headerLower: string, alias: string): boolean {
+  return new RegExp(
+    `(^|[^a-z0-9])${escapeRegExp(alias)}([^a-z0-9]|$)`,
+  ).test(headerLower);
+}
 
 function findColumn(headers: string[], aliases: string[]): string | null {
   const lower = new Map(headers.map((h) => [h.toLowerCase().trim(), h]));
@@ -186,7 +390,7 @@ function findColumn(headers: string[], aliases: string[]): string | null {
   }
   for (const a of aliases) {
     for (const [low, original] of lower) {
-      if (low.includes(a)) return original;
+      if (tokenMatch(low, a)) return original;
     }
   }
   return null;

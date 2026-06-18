@@ -12,9 +12,9 @@ import {
 import { Button } from "@/components/ui/button";
 
 /**
- * Shown the first time AI categorization is used. Explains that descriptions
- * (and only descriptions) are sent to the configured LLM provider, and that
- * free tiers may train on submitted prompts.
+ * Shown the first time AI categorization is used. Explains that the account
+ * name and number (and only those) are sent to the configured LLM provider,
+ * and that free tiers may train on submitted prompts.
  */
 export function PrivacyNotice({
   open,
@@ -37,13 +37,15 @@ export function PrivacyNotice({
           <DialogTitle>Before using AI categorization</DialogTitle>
           <DialogDescription className="space-y-3 pt-1 text-left">
             <span className="block">
-              The <strong>account names/descriptions</strong> for the accounts
-              the rule engine couldn&apos;t place will be sent to your configured
-              LLM provider (Groq or Gemini) to suggest a tax code.
+              The <strong>account name and account number</strong> for the
+              accounts the rule engine couldn&apos;t place will be sent to your
+              configured LLM provider (Groq or Gemini) to suggest a tax code. The
+              account number is sent because its chart-of-accounts series is a
+              strong signal of the account&apos;s type.
             </span>
             <span className="block rounded-md bg-success/10 p-2.5 text-sm text-foreground">
-              ✓ Only the account description text is sent — never amounts,
-              balances, account numbers, or client identifiers.
+              ✓ Only the account name/description and its account number are sent
+              — never amounts, balances, dates, or other values.
             </span>
             <span className="block">
               Account names can themselves contain client info (e.g. a property

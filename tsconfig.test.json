@@ -1,0 +1,15 @@
+{
+  "//": "Compiles the pure lib + the runnable check to CommonJS so plain Node can run them (no test framework / TS loader needed). See `npm test`.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "outDir": ".testbuild",
+    "incremental": false,
+    "types": ["node"],
+    "plugins": []
+  },
+  "include": ["src/lib/**/*.ts", "scripts/check.ts"],
+  "exclude": ["node_modules", ".next", ".testbuild"]
+}
